@@ -293,7 +293,7 @@ static int max8698_get_voltage(struct regulator_dev *rdev)
 }
 
 static int max8698_set_voltage(struct regulator_dev *rdev,
-				int min_uV, int max_uV)
+				int min_uV, int max_uV, unsigned *selector)
 {
 	struct max8698_data *max8698 = rdev_get_drvdata(rdev);
 	const struct voltage_map_desc *desc;
@@ -319,6 +319,8 @@ static int max8698_set_voltage(struct regulator_dev *rdev,
 	if (desc->min + desc->step*i > max_vol)
 		return -EINVAL;
 
+	*selector = i;
+
 	ret = max8698_get_voltage_register(rdev, &reg, &shift, &mask);
 	if (ret)
 		return ret;
@@ -338,7 +340,7 @@ static struct regulator_ops max8698_regulator_ops = {
 };
 
 static int max8698_set_buck12_voltage(struct regulator_dev *rdev,
-				int min_uV, int max_uV)
+				int min_uV, int max_uV, unsigned *selector)
 {
 	struct max8698_data *max8698 = rdev_get_drvdata(rdev);
 	const struct voltage_map_desc *desc;
@@ -364,6 +366,8 @@ static int max8698_set_buck12_voltage(struct regulator_dev *rdev,
 
 	if (desc->min + desc->step*i > max_vol)
 		return -EINVAL;
+
+	*selector = i;
 
 	/* Read ramp rate */
 	max8698_i2c_device_read(max8698, MAX8698_REG_ADISCHG_EN2, &val);
