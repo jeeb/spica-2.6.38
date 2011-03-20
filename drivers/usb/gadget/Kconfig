@@ -951,6 +951,16 @@ config USB_ANDROID_RNDIS_WCEIS
          If you enable this option, the device is no longer CDC ethernet
          compatible.
 
+config USB_ANDROID_RNDIS_DWORD_ALIGNED
+        boolean "Use bounce buffers for non dword aligned packets"
+        depends on USB_ANDROID_RNDIS
+        help
+          Causes the driver to allocate a temporary dword aligned buffer
+          for each packet which doesn't have such alignment.
+
+          Enable this option only if your hardware requires dword alignment
+          of data packets for DMA transfers.
+
 config USB_CDC_COMPOSITE
 	tristate "CDC Composite Device (Ethernet and ACM)"
 	depends on NET
