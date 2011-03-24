@@ -882,6 +882,25 @@ static struct s3c_fb_platdata spica_lcd_pdata __initdata = {
 };
 
 /*
+ * RAM console (for debugging)
+ */
+
+static struct resource spica_ram_console_resources[] = {
+	[0] = {
+		.start	= 0x5c000000,
+		.end	= 0x5c0fffff,
+		.flags	= IORESOURCE_MEM,
+	},
+};
+
+struct platform_device spica_ram_console = {
+	.name		= "ram_console",
+	.id		= -1,
+	.num_resources	= ARRAY_SIZE(spica_ram_console_resources),
+	.resource	= spica_ram_console_resources,
+};
+
+/*
  * Keyboard
  */
 
@@ -964,6 +983,7 @@ static struct platform_device *spica_devices[] __initdata = {
 	&spica_android_usb,
 	&spica_usb_mass_storage,
 	&spica_usb_rndis,
+	&spica_ram_console,
 	&spica_gpio_keys,
 };
 
