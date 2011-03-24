@@ -38,6 +38,8 @@
 #include <linux/fsa9480.h>
 #include <linux/clk.h>
 #include <linux/mmc/host.h>
+#include <linux/gpio_keys.h>
+
 #include <video/s6d05a.h>
 
 #include <asm/mach/arch.h>
@@ -62,6 +64,7 @@
 #include <plat/adc.h>
 #include <plat/ts.h>
 #include <plat/sdhci.h>
+#include <plat/keypad.h>
 
 #include <mach/regs-modem.h>
 #include <mach/regs-gpio.h>
@@ -879,6 +882,68 @@ static struct s3c_fb_platdata spica_lcd_pdata __initdata = {
 };
 
 /*
+ * Keyboard
+ */
+
+/* S3C6410 matrix keypad controller */
+
+static uint32_t spica_keymap[] __initdata = {
+	/* KEY(row, col, keycode) */
+	KEY(0, 0, 201), KEY(0, 1, 209) /* Reserved  */ /* Reserved  */,
+	KEY(1, 0, 202), KEY(1, 1, 210), KEY(1, 2, 218), KEY(1, 3, 226),
+	KEY(2, 0, 203), KEY(2, 1, 211), KEY(2, 2, 219), KEY(2, 3, 227),
+	KEY(3, 0, 204), KEY(3, 1, 212) /* Reserved  */, KEY(3, 3, 228),
+};
+
+static struct matrix_keymap_data spica_keymap_data __initdata = {
+	.keymap		= spica_keymap,
+	.keymap_size	= ARRAY_SIZE(spica_keymap),
+};
+
+static struct samsung_keypad_platdata spica_keypad_pdata __initdata = {
+	.keymap_data	= &spica_keymap_data,
+	.rows		= 4,
+	.cols		= 4,
+};
+
+/* GPIO keys */
+
+static struct gpio_keys_button spica_gpio_keys_data[] = {
+	{
+		.gpio			= GPIO_POWER_N,
+		.code			= 249,
+		.desc			= "Power",
+		.active_low		= 1,
+		.debounce_interval	= 5,
+		.type                   = EV_KEY,
+		.wakeup			= 1,
+	},
+	{
+		.gpio			= GPIO_HOLD_KEY_N,
+		.code			= 217,
+		.desc			= "Hold",
+		.active_low		= 1,
+		.debounce_interval	= 5,
+		.type                   = EV_KEY,
+		.wakeup			= 1,
+	},
+};
+
+static struct gpio_keys_platform_data spica_gpio_keys_pdata  = {
+	.buttons	= spica_gpio_keys_data,
+	.nbuttons	= ARRAY_SIZE(spica_gpio_keys_data),
+};
+
+static struct platform_device spica_gpio_keys = {
+	.name		= "gpio-keys",
+	.id		= 0,
+	.num_resources	= 0,
+	.dev		= {
+		.platform_data	= &spica_gpio_keys_pdata,
+	}
+};
+
+/*
  * Platform devices
  */
 
@@ -891,6 +956,7 @@ static struct platform_device *spica_devices[] __initdata = {
 	&s3c_device_fb,
 	&s3c_device_usb_hsotg,
 	&s3c_device_onenand,
+	&samsung_device_keypad,
 	&spica_pmic_i2c,
 	&spica_audio_i2c,
 	&spica_touch_i2c,
@@ -898,6 +964,7 @@ static struct platform_device *spica_devices[] __initdata = {
 	&spica_android_usb,
 	&spica_usb_mass_storage,
 	&spica_usb_rndis,
+	&spica_gpio_keys,
 };
 
 /*
@@ -1142,6 +1209,8 @@ static void __init spica_machine_init(void)
 
 	s3c_sdhci0_set_platdata(&spica_hsmmc0_pdata);
 	s3c_sdhci2_set_platdata(&spica_hsmmc2_pdata);
+
+	samsung_keypad_set_platdata(&spica_keypad_pdata);
 
 	/* Register platform devices */
 	platform_add_devices(spica_devices, ARRAY_SIZE(spica_devices));
