@@ -39,6 +39,9 @@
 #include <linux/clk.h>
 #include <linux/mmc/host.h>
 #include <linux/gpio_keys.h>
+#include <linux/mtd/mtd.h>
+#include <linux/mtd/onenand.h>
+#include <linux/mtd/partitions.h>
 
 #include <video/s6d05a.h>
 
@@ -963,6 +966,78 @@ static struct platform_device spica_gpio_keys = {
 };
 
 /*
+ * OneNAND
+ */
+
+static struct mtd_partition spica_onenand_parts[] = {
+	[0] = {
+		.name		= "pbl",
+		.size		= SZ_128K,
+		.offset		= 0,
+		.mask_flags	= MTD_WRITEABLE,
+	},
+	[1] = {
+		.name		= "sbl",
+		.size		= SZ_1M + SZ_256K,
+		.offset		= MTDPART_OFS_APPEND,
+		.mask_flags	= MTD_WRITEABLE,
+	},
+	[2] = {
+		.name		= "logo",
+		.size		= SZ_128K,
+		.offset		= MTDPART_OFS_APPEND,
+		.mask_flags	= MTD_WRITEABLE,
+	},
+	[3] = {
+		.name		= "param",
+		.size		= SZ_256K,
+		.offset		= MTDPART_OFS_APPEND,
+		.mask_flags	= MTD_WRITEABLE,
+	},
+	[4] = {
+		.name		= "kernel",
+		.size		= SZ_4M + SZ_1M,
+		.offset		= MTDPART_OFS_APPEND,
+	},
+	[5] = {
+		.name		= "system",
+		.size		= SZ_128M + SZ_16M + SZ_4M + SZ_2M,
+		.offset		= MTDPART_OFS_APPEND,
+	},
+	[6] = {
+		.name		= "data",
+		.size		= SZ_128M + SZ_64M + SZ_8M,
+		.offset		= MTDPART_OFS_APPEND,
+	},
+	[7] = {
+		.name		= "cache",
+		.size		= SZ_64M + SZ_16M + SZ_512K,
+		.offset		= MTDPART_OFS_APPEND,
+	},
+	[8] = {
+		.name		= "xbin",
+		.size		= SZ_32M + SZ_8M,
+		.offset		= MTDPART_OFS_APPEND,
+	},
+	[9] = {
+		.name		= "modem",
+		.size		= SZ_16M,
+		.offset		= MTDPART_OFS_APPEND,
+	},
+	[10] = {
+		.name		= "efs",
+		.size		= SZ_8M,
+		.offset		= MTDPART_OFS_APPEND,
+		.mask_flags	= MTD_WRITEABLE,
+	},
+};
+
+static struct onenand_platform_data spica_onenand_pdata = {
+	.parts		= spica_onenand_parts,
+	.nr_parts	= ARRAY_SIZE(spica_onenand_parts),
+};
+
+/*
  * Platform devices
  */
 
@@ -1231,6 +1306,9 @@ static void __init spica_machine_init(void)
 	s3c_sdhci2_set_platdata(&spica_hsmmc2_pdata);
 
 	samsung_keypad_set_platdata(&spica_keypad_pdata);
+
+	s3c_set_platdata(&spica_onenand_pdata, sizeof(spica_onenand_pdata),
+							&s3c_device_onenand);
 
 	/* Register platform devices */
 	platform_add_devices(spica_devices, ARRAY_SIZE(spica_devices));
