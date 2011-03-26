@@ -24,7 +24,7 @@
 #include <linux/uaccess.h>
 #include <linux/interrupt.h>
 #include <linux/pm_runtime.h>
-
+#include <linux/regulator/consumer.h>
 #include <mach/map.h>
 #include <plat/regs-fb-v4.h>
 #include <plat/fb.h>
@@ -209,6 +209,8 @@ struct s3c_fb {
 	int			 irq_no;
 	unsigned long		 irq_flags;
 	struct s3c_fb_vsync	 vsync_info;
+
+	struct regulator	*regulator;
 };
 
 /**
@@ -1337,6 +1339,12 @@ static int __devinit s3c_fb_probe(struct platform_device *pdev)
 	sfb->pdata = pd;
 	sfb->variant = fbdrv->variant;
 
+	sfb->regulator = regulator_get(dev, "pd");
+	if (IS_ERR(sfb->regulator))
+		sfb->regulator = 0;
+	if (sfb->regulator)
+		regulator_enable(sfb->regulator);
+
 	sfb->bus_clk = clk_get(dev, "lcd");
 	if (IS_ERR(sfb->bus_clk)) {
 		dev_err(dev, "failed to get bus clock\n");
@@ -1445,6 +1453,10 @@ err_req_region:
 err_clk:
 	clk_disable(sfb->bus_clk);
 	clk_put(sfb->bus_clk);
+	if (sfb->regulator) {
+		regulator_disable(sfb->regulator);
+		regulator_put(sfb->regulator);
+	}
 
 err_sfb:
 	kfree(sfb);
@@ -1476,6 +1488,11 @@ static int __devexit s3c_fb_remove(struct platform_device *pdev)
 	clk_disable(sfb->bus_clk);
 	clk_put(sfb->bus_clk);
 
+	if (sfb->regulator) {
+		regulator_disable(sfb->regulator);
+		regulator_put(sfb->regulator);
+	}
+
 	release_resource(sfb->regs_res);
 	kfree(sfb->regs_res);
 
@@ -1505,6 +1522,8 @@ static int s3c_fb_suspend(struct device *dev)
 	}
 
 	clk_disable(sfb->bus_clk);
+	if (sfb->regulator)
+		regulator_disable(sfb->regulator);
 	return 0;
 }
 
@@ -1516,6 +1535,8 @@ static int s3c_fb_resume(struct device *dev)
 	struct s3c_fb_win *win;
 	int win_no;
 
+	if (sfb->regulator)
+		regulator_enable(sfb->regulator);
 	clk_enable(sfb->bus_clk);
 
 	/* setup registers */
@@ -1563,6 +1584,8 @@ int s3c_fb_runtime_suspend(struct device *dev)
 	}
 
 	clk_disable(sfb->bus_clk);
+	if (sfb->regulator)
+		regulator_disable(sfb->regulator);
 	return 0;
 }
 
@@ -1574,6 +1597,8 @@ int s3c_fb_runtime_resume(struct device *dev)
 	struct s3c_fb_win *win;
 	int win_no;
 
+	if (sfb->regulator)
+		regulator_enable(sfb->regulator);
 	clk_enable(sfb->bus_clk);
 
 	/* setup registers */
