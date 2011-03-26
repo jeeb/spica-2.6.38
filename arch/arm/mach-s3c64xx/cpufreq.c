@@ -18,20 +18,22 @@
 #include <linux/regulator/consumer.h>
 
 static struct clk *armclk;
-static struct regulator *vddarm;
+static struct regulator *vddarm, *vddint;
 static unsigned long regulator_latency;
 
 #ifdef CONFIG_CPU_S3C6410
 struct s3c64xx_dvfs {
 	unsigned int vddarm_min;
 	unsigned int vddarm_max;
+	unsigned int vddint_min;
+	unsigned int vddint_max;
 };
 
 static struct s3c64xx_dvfs s3c64xx_dvfs_table[] = {
-	[0] = { 1000000, 1150000 },
-	[1] = { 1050000, 1150000 },
-	[2] = { 1100000, 1150000 },
-	[3] = { 1200000, 1350000 },
+	[0] = { 1000000, 1150000, 1250000, 1300000 },
+	[1] = { 1050000, 1150000, 1250000, 1300000 },
+	[2] = { 1100000, 1150000, 1250000, 1300000 },
+	[3] = { 1200000, 1350000, 1250000, 1300000 },
 };
 
 static struct cpufreq_frequency_table s3c64xx_freq_table[] = {
@@ -102,6 +104,16 @@ static int s3c64xx_cpufreq_set_target(struct cpufreq_policy *policy,
 			goto err;
 		}
 	}
+	if (vddint && freqs.new > freqs.old) {
+		ret = regulator_set_voltage(vddint,
+					    dvfs->vddint_min,
+					    dvfs->vddint_max);
+		if (ret != 0) {
+			pr_err("cpufreq: Failed to set VDDINT for %dkHz: %d\n",
+			       freqs.new, ret);
+			goto err;
+		}
+	}
 #endif
 
 	ret = clk_set_rate(armclk, freqs.new * 1000);
@@ -112,6 +124,16 @@ static int s3c64xx_cpufreq_set_target(struct cpufreq_policy *policy,
 	}
 
 #ifdef CONFIG_REGULATOR
+	if (vddint && freqs.new < freqs.old) {
+		ret = regulator_set_voltage(vddint,
+					    dvfs->vddint_min,
+					    dvfs->vddint_max);
+		if (ret != 0) {
+			pr_err("cpufreq: Failed to set VDDINT for %dkHz: %d\n",
+			       freqs.new, ret);
+			goto err_clk;
+		}
+	}
 	if (vddarm && freqs.new < freqs.old) {
 		ret = regulator_set_voltage(vddarm,
 					    dvfs->vddarm_min,
@@ -144,6 +166,7 @@ err:
 static void __init s3c64xx_cpufreq_config_regulator(void)
 {
 	int count, v, i, found;
+	int count_int, found_int;
 	struct cpufreq_frequency_table *freq;
 	struct s3c64xx_dvfs *dvfs;
 
@@ -151,6 +174,10 @@ static void __init s3c64xx_cpufreq_config_regulator(void)
 	if (count < 0) {
 		pr_err("cpufreq: Unable to check supported voltages\n");
 	}
+
+	count_int = 0;
+	if (vddint)
+		count_int = regulator_count_voltages(vddint);
 
 	freq = s3c64xx_freq_table;
 	while (count > 0 && freq->frequency != CPUFREQ_TABLE_END) {
@@ -166,7 +193,15 @@ static void __init s3c64xx_cpufreq_config_regulator(void)
 				found = 1;
 		}
 
-		if (!found) {
+		found_int = 0;
+
+		for (i = 0; i < count_int; i++) {
+			v = regulator_list_voltage(vddint, i);
+			if (v >= dvfs->vddint_min && v <= dvfs->vddint_max)
+				found_int = 1;
+		}
+
+		if (!found || (vddint && !found_int)) {
 			pr_debug("cpufreq: %dkHz unsupported by regulator\n",
 				 freq->frequency);
 			freq->frequency = CPUFREQ_ENTRY_INVALID;
@@ -202,6 +237,9 @@ static int __init s3c64xx_cpufreq_driver_init(struct cpufreq_policy *policy)
 	}
 
 #ifdef CONFIG_REGULATOR
+	vddint = regulator_get(NULL, "vddint");
+	if (IS_ERR(vddint))
+		vddint = 0;
 	vddarm = regulator_get(NULL, "vddarm");
 	if (IS_ERR(vddarm)) {
 		ret = PTR_ERR(vddarm);
@@ -247,6 +285,8 @@ static int __init s3c64xx_cpufreq_driver_init(struct cpufreq_policy *policy)
 		pr_err("cpufreq: Failed to configure frequency table: %d\n",
 		       ret);
 		regulator_put(vddarm);
+		if (vddint)
+			regulator_put(vddint);
 		clk_put(armclk);
 	}
 
