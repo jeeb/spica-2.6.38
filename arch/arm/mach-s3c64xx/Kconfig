@@ -77,6 +77,13 @@ config S3C64XX_SETUP_SDHCI_GPIO
 	help
 	  Common setup code for S3C64XX SDHCI GPIO configurations
 
+config S3C64XX_POWER_DOMAIN
+	bool
+	depends on REGULATOR
+	default y
+	help
+	  Enable S3C64xx power domain support.
+
 # S36400 Macchine support
 
 config MACH_SMDK6400
@@ -286,5 +293,6 @@ config MACH_GT_I5700
 	select SAMSUNG_DEV_KEYPAD
 	select HAVE_S3C2410_WATCHDOG if WATCHDOG
 	select S3C64XX_SETUP_KEYPAD
+	select S3C64XX_POWER_DOMAIN
 	help
 	  Machine support for the Samsung Galaxy Spica GT-i5700 phone.
