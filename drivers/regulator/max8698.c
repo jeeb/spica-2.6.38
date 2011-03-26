@@ -255,9 +255,11 @@ static int max8698_get_voltage_register(struct regulator_dev *rdev,
 	case MAX8698_BUCK1:
 		reg = MAX8698_REG_DVSARM12;
 		mask = 0xf;
+		break;
 	case MAX8698_BUCK2:
 		reg = MAX8698_REG_DVSINT12;
 		mask = 0xf;
+		break;
 	case MAX8698_BUCK3:
 		reg = MAX8698_REG_BUCK3;
 		break;
@@ -370,21 +372,29 @@ static int max8698_set_buck12_voltage(struct regulator_dev *rdev,
 	*selector = i;
 
 	/* Read ramp rate */
-	max8698_i2c_device_read(max8698, MAX8698_REG_ADISCHG_EN2, &val);
+	ret = max8698_i2c_device_read(max8698, MAX8698_REG_ADISCHG_EN2, &val);
+	if (ret)
+		goto err;
 	rate = (val & 0xf) + 1;
 
 	previous_vol = max8698_get_voltage(rdev);
 
 	switch (ldo) {
 	case MAX8698_BUCK1:
-		max8698_i2c_device_update(max8698,
+		ret = max8698_i2c_device_update(max8698,
 				MAX8698_REG_DVSARM12, (i << 4) | i, 0xff);
-		max8698_i2c_device_update(max8698,
+		if (ret)
+			goto err;
+		ret = max8698_i2c_device_update(max8698,
 				MAX8698_REG_DVSARM34, (i << 4) | i, 0xff);
+		if (ret)
+			goto err;
 		break;
 	case MAX8698_BUCK2:
-		max8698_i2c_device_update(max8698,
+		ret = max8698_i2c_device_update(max8698,
 				MAX8698_REG_DVSINT12, (i << 4) | i, 0xff);
+		if (ret)
+			goto err;
 		break;
 	}
 
@@ -395,6 +405,7 @@ static int max8698_set_buck12_voltage(struct regulator_dev *rdev,
 	/* wait for ramp delay */
 	udelay(difference / rate);
 
+err:
 	return ret;
 }
 
