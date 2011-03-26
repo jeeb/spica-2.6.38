@@ -29,6 +29,7 @@ struct s3c64xx_dvfs {
 	unsigned int vddint_max;
 };
 
+#ifndef CONFIG_S3C6410_800MHZ
 static struct s3c64xx_dvfs s3c64xx_dvfs_table[] = {
 	[0] = { 1000000, 1150000, 1250000, 1300000 },
 	[1] = { 1050000, 1150000, 1250000, 1300000 },
@@ -48,6 +49,22 @@ static struct cpufreq_frequency_table s3c64xx_freq_table[] = {
 	{ 3, 667000 },
 	{ 0, CPUFREQ_TABLE_END },
 };
+#else
+static struct s3c64xx_dvfs s3c64xx_dvfs_table[] = {
+	[0] = { 1050000, 1100000, 1250000, 1300000 },
+	[1] = { 1100000, 1150000, 1250000, 1300000 },
+	[2] = { 1150000, 1200000, 1250000, 1300000 },
+	[3] = { 1350000, 1400000, 1250000, 1300000 },
+};
+
+static struct cpufreq_frequency_table s3c64xx_freq_table[] = {
+	{ 0, 133333 },
+	{ 1, 266666 },
+	{ 2, 400000 },
+	{ 3, 800000 },
+	{ 0, CPUFREQ_TABLE_END },
+};
+#endif
 #endif
 
 static int s3c64xx_cpufreq_verify_speed(struct cpufreq_policy *policy)

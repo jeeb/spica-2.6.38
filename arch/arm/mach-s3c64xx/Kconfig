@@ -84,6 +84,13 @@ config S3C64XX_POWER_DOMAIN
 	help
 	  Enable S3C64xx power domain support.
 
+config S3C6410_800MHZ
+	bool
+	depends on CPU_S3C6410
+	default n
+	help
+	  Enable 800 MHz operating mode on S3C6410 CPU.
+
 # S36400 Macchine support
 
 config MACH_SMDK6400
@@ -294,5 +301,6 @@ config MACH_GT_I5700
 	select HAVE_S3C2410_WATCHDOG if WATCHDOG
 	select S3C64XX_SETUP_KEYPAD
 	select S3C64XX_POWER_DOMAIN
+	select S3C6410_800MHZ
 	help
 	  Machine support for the Samsung Galaxy Spica GT-i5700 phone.
