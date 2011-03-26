@@ -583,7 +583,7 @@ static int __init max8698_init(void)
 {
 	return i2c_add_driver(&max8698_i2c_driver);
 }
-module_init(max8698_init);
+subsys_initcall(max8698_init);
 
 static void __exit max8698_exit(void)
 {
