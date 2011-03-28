@@ -42,6 +42,7 @@
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/onenand.h>
 #include <linux/mtd/partitions.h>
+#include <linux/amba/pl08x.h>
 
 #include <video/s6d05a.h>
 
@@ -1038,6 +1039,228 @@ static struct onenand_platform_data spica_onenand_pdata = {
 };
 
 /*
+ * PL080S DMA engines
+ */
+
+static struct pl08x_channel_data spica_dma0_slaves[] = {
+	{
+		.bus_id		= "uart0_0",
+		.min_signal	= 0,
+		.max_signal	= 0,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "uart0_1",
+		.min_signal	= 1,
+		.max_signal	= 1,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "uart1_0",
+		.min_signal	= 2,
+		.max_signal	= 2,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "uart1_1",
+		.min_signal	= 3,
+		.max_signal	= 3,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "uart2_0",
+		.min_signal	= 4,
+		.max_signal	= 4,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "uart2_1",
+		.min_signal	= 5,
+		.max_signal	= 5,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "uart3_0",
+		.min_signal	= 6,
+		.max_signal	= 6,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "uart3_1",
+		.min_signal	= 7,
+		.max_signal	= 7,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "pcm0_tx",
+		.min_signal	= 8,
+		.max_signal	= 8,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "pcm0_rx",
+		.min_signal	= 9,
+		.max_signal	= 9,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "i2s0_tx",
+		.min_signal	= 10,
+		.max_signal	= 10,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "i2s0_rx",
+		.min_signal	= 11,
+		.max_signal	= 11,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "spi0_tx",
+		.min_signal	= 12,
+		.max_signal	= 12,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "spi0_rx",
+		.min_signal	= 13,
+		.max_signal	= 13,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "i2sv40_tx",
+		.min_signal	= 14,
+		.max_signal	= 14,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "i2sv40_rx",
+		.min_signal	= 15,
+		.max_signal	= 15,
+		.periph_buses	= PL08X_AHB2,
+	},
+};
+
+static struct pl08x_platform_data spica_dma0_pdata = {
+	.slave_channels		= spica_dma0_slaves,
+	.num_slave_channels	= ARRAY_SIZE(spica_dma0_slaves),
+	.lli_buses		= PL08X_AHB1,
+	.mem_buses		= PL08X_AHB1,
+	.clock			= "dma0",
+};
+
+static struct resource spica_dma0_resources[] = {
+	[0] = {
+		.start	= S3C64XX_PA_DMA0,
+		.end	= S3C64XX_PA_DMA0 + 0x200 - 1,
+		.flags	= IORESOURCE_MEM,
+	},
+	[1] = {
+		.start	= IRQ_DMA0,
+		.end	= IRQ_DMA0,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static u64 spica_dma0_dma_mask = 0xffffffff;
+
+static struct platform_device spica_dma0 = {
+	.name		= "pl080s-dmac",
+	.id		= 0,
+	.resource	= spica_dma0_resources,
+	.num_resources	= ARRAY_SIZE(spica_dma0_resources),
+	.dev		= {
+		.platform_data		= &spica_dma0_pdata,
+		.dma_mask		= &spica_dma0_dma_mask,
+		.coherent_dma_mask	= 0xffffffff,
+	}
+};
+
+static struct pl08x_channel_data spica_dma1_slaves[] = {
+	{
+		.bus_id		= "pcm1_tx",
+		.min_signal	= 0,
+		.max_signal	= 0,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "pcm1_rx",
+		.min_signal	= 1,
+		.max_signal	= 1,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "i2s1_tx",
+		.min_signal	= 2,
+		.max_signal	= 2,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "i2s1_rx",
+		.min_signal	= 3,
+		.max_signal	= 3,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "spi1_tx",
+		.min_signal	= 4,
+		.max_signal	= 4,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "spi1_rx",
+		.min_signal	= 5,
+		.max_signal	= 5,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "ac97_out",
+		.min_signal	= 6,
+		.max_signal	= 6,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "ac97_in",
+		.min_signal	= 7,
+		.max_signal	= 7,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "ac97_mic",
+		.min_signal	= 8,
+		.max_signal	= 8,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "pwm",
+		.min_signal	= 9,
+		.max_signal	= 9,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "irda",
+		.min_signal	= 10,
+		.max_signal	= 10,
+		.periph_buses	= PL08X_AHB2,
+	}, {
+		.bus_id		= "external",
+		.min_signal	= 11,
+		.max_signal	= 11,
+		.periph_buses	= PL08X_AHB2,
+	},
+};
+
+static struct pl08x_platform_data spica_dma1_pdata = {
+	.slave_channels		= spica_dma1_slaves,
+	.num_slave_channels	= ARRAY_SIZE(spica_dma1_slaves),
+	.lli_buses		= PL08X_AHB1,
+	.mem_buses		= PL08X_AHB1,
+	.clock			= "dma1",
+};
+
+static struct resource spica_dma1_resources[] = {
+	[0] = {
+		.start	= S3C64XX_PA_DMA1,
+		.end	= S3C64XX_PA_DMA1 + 0x200 - 1,
+		.flags	= IORESOURCE_MEM,
+	},
+	[1] = {
+		.start	= IRQ_DMA1,
+		.end	= IRQ_DMA1,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static u64 spica_dma1_dma_mask = 0xffffffff;
+
+static struct platform_device spica_dma1 = {
+	.name		= "pl080s-dmac",
+	.id		= 1,
+	.resource	= spica_dma1_resources,
+	.num_resources	= ARRAY_SIZE(spica_dma1_resources),
+	.dev		= {
+		.platform_data	= &spica_dma1_pdata,
+		.dma_mask		= &spica_dma1_dma_mask,
+		.coherent_dma_mask	= 0xffffffff,
+	}
+};
+
+/*
  * Platform devices
  */
 
@@ -1060,6 +1283,8 @@ static struct platform_device *spica_devices[] __initdata = {
 	&spica_usb_rndis,
 	&spica_ram_console,
 	&spica_gpio_keys,
+	&spica_dma0,
+	&spica_dma1,
 };
 
 /*
