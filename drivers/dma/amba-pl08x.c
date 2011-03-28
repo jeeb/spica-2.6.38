@@ -102,6 +102,7 @@
 struct vendor_data {
 	u8 channels;
 	bool dualmaster;
+	u32 config_offset;
 };
 
 /*
@@ -115,6 +116,12 @@ struct pl08x_lli {
 	u32 dst;
 	u32 lli;
 	u32 cctl;
+/*
+ * The following fields are proprietary cruft of Samsung.
+ * Three dummy words have been added to keep 4-word alignment of each LLI entry.
+ */
+	u32 cctl2;
+	u32 dummy[3];
 };
 
 /**
@@ -193,7 +200,7 @@ static int pl08x_phy_channel_busy(struct pl08x_phy_chan *ch)
 {
 	unsigned int val;
 
-	val = readl(ch->base + PL080_CH_CONFIG);
+	val = readl(ch->base + ch->config_offset);
 	return val & PL080_CONFIG_ACTIVE;
 }
 
@@ -227,7 +234,9 @@ static void pl08x_start_txd(struct pl08x_dma_chan *plchan,
 	writel(lli->dst, phychan->base + PL080_CH_DST_ADDR);
 	writel(lli->lli, phychan->base + PL080_CH_LLI);
 	writel(lli->cctl, phychan->base + PL080_CH_CONTROL);
-	writel(txd->ccfg, phychan->base + PL080_CH_CONFIG);
+	if (phychan->config_offset == PL080S_CH_CONFIG)
+		writel(lli->cctl2, phychan->base + PL080S_CH_CONTROL2);
+	writel(txd->ccfg, phychan->base + phychan->config_offset);
 
 	/* Enable the DMA channel */
 	/* Do not access config register until channel shows as disabled */
@@ -235,11 +244,11 @@ static void pl08x_start_txd(struct pl08x_dma_chan *plchan,
 		cpu_relax();
 
 	/* Do not access config register until channel shows as inactive */
-	val = readl(phychan->base + PL080_CH_CONFIG);
+	val = readl(phychan->base + phychan->config_offset);
 	while ((val & PL080_CONFIG_ACTIVE) || (val & PL080_CONFIG_ENABLE))
-		val = readl(phychan->base + PL080_CH_CONFIG);
+		val = readl(phychan->base + phychan->config_offset);
 
-	writel(val | PL080_CONFIG_ENABLE, phychan->base + PL080_CH_CONFIG);
+	writel(val | PL080_CONFIG_ENABLE, phychan->base + phychan->config_offset);
 }
 
 /*
@@ -258,9 +267,9 @@ static void pl08x_pause_phy_chan(struct pl08x_phy_chan *ch)
 	int timeout;
 
 	/* Set the HALT bit and wait for the FIFO to drain */
-	val = readl(ch->base + PL080_CH_CONFIG);
+	val = readl(ch->base + ch->config_offset);
 	val |= PL080_CONFIG_HALT;
-	writel(val, ch->base + PL080_CH_CONFIG);
+	writel(val, ch->base + ch->config_offset);
 
 	/* Wait for channel inactive */
 	for (timeout = 1000; timeout; timeout--) {
@@ -277,9 +286,9 @@ static void pl08x_resume_phy_chan(struct pl08x_phy_chan *ch)
 	u32 val;
 
 	/* Clear the HALT bit */
-	val = readl(ch->base + PL080_CH_CONFIG);
+	val = readl(ch->base + ch->config_offset);
 	val &= ~PL080_CONFIG_HALT;
-	writel(val, ch->base + PL080_CH_CONFIG);
+	writel(val, ch->base + ch->config_offset);
 }
 
 
@@ -292,12 +301,12 @@ static void pl08x_resume_phy_chan(struct pl08x_phy_chan *ch)
 static void pl08x_terminate_phy_chan(struct pl08x_driver_data *pl08x,
 	struct pl08x_phy_chan *ch)
 {
-	u32 val = readl(ch->base + PL080_CH_CONFIG);
+	u32 val = readl(ch->base + ch->config_offset);
 
 	val &= ~(PL080_CONFIG_ENABLE | PL080_CONFIG_ERR_IRQ_MASK |
 	         PL080_CONFIG_TC_IRQ_MASK);
 
-	writel(val, ch->base + PL080_CH_CONFIG);
+	writel(val, ch->base + ch->config_offset);
 
 	writel(1 << ch->id, pl08x->base + PL080_ERR_CLEAR);
 	writel(1 << ch->id, pl08x->base + PL080_TC_CLEAR);
@@ -456,7 +465,7 @@ static inline unsigned int pl08x_get_bytes_for_cctl(unsigned int coded)
 }
 
 static inline u32 pl08x_cctl_bits(u32 cctl, u8 srcwidth, u8 dstwidth,
-				  size_t tsize)
+				  size_t tsize, u32 *cctl2)
 {
 	u32 retbits = cctl;
 
@@ -496,6 +505,7 @@ static inline u32 pl08x_cctl_bits(u32 cctl, u8 srcwidth, u8 dstwidth,
 		break;
 	}
 
+	*cctl2 = tsize;
 	retbits |= tsize << PL080_CONTROL_TRANSFER_SIZE_SHIFT;
 	return retbits;
 }
@@ -547,7 +557,7 @@ static void pl08x_choose_master_bus(struct pl08x_lli_build_data *bd,
  * Fills in one LLI for a certain transfer descriptor and advance the counter
  */
 static void pl08x_fill_lli_for_desc(struct pl08x_lli_build_data *bd,
-	int num_llis, int len, u32 cctl)
+	int num_llis, int len, u32 cctl, u32 cctl2)
 {
 	struct pl08x_lli *llis_va = bd->txd->llis_va;
 	dma_addr_t llis_bus = bd->txd->llis_bus;
@@ -555,6 +565,7 @@ static void pl08x_fill_lli_for_desc(struct pl08x_lli_build_data *bd,
 	BUG_ON(num_llis >= MAX_NUM_TSFR_LLIS);
 
 	llis_va[num_llis].cctl = cctl;
+	llis_va[num_llis].cctl2 = cctl2;
 	llis_va[num_llis].src = bd->srcbus.addr;
 	llis_va[num_llis].dst = bd->dstbus.addr;
 	llis_va[num_llis].lli = llis_bus + (num_llis + 1) * sizeof(struct pl08x_lli);
@@ -594,7 +605,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 	struct pl08x_bus_data *mbus, *sbus;
 	struct pl08x_lli_build_data bd;
 	int num_llis = 0;
-	u32 cctl;
+	u32 cctl, cctl2 = 0;
 	size_t max_bytes_per_lli;
 	size_t total_bytes = 0;
 	struct pl08x_lli *llis_va;
@@ -663,8 +674,9 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 				 "%s single byte LLIs for a transfer of "
 				 "less than a bus width (remain 0x%08x)\n",
 				 __func__, bd.remainder);
-			cctl = pl08x_cctl_bits(cctl, 1, 1, 1);
-			pl08x_fill_lli_for_desc(&bd, num_llis++, 1, cctl);
+			cctl = pl08x_cctl_bits(cctl, 1, 1, 1, &cctl2);
+			pl08x_fill_lli_for_desc(&bd, num_llis++, 1,
+								cctl, cctl2);
 			total_bytes++;
 		}
 	} else {
@@ -674,8 +686,9 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 				"%s adjustment lli for less than bus width "
 				 "(remain 0x%08x)\n",
 				 __func__, bd.remainder);
-			cctl = pl08x_cctl_bits(cctl, 1, 1, 1);
-			pl08x_fill_lli_for_desc(&bd, num_llis++, 1, cctl);
+			cctl = pl08x_cctl_bits(cctl, 1, 1, 1, &cctl2);
+			pl08x_fill_lli_for_desc(&bd, num_llis++, 1,
+								cctl, cctl2);
 			total_bytes++;
 		}
 
@@ -781,13 +794,13 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 				cctl = pl08x_cctl_bits(cctl,
 						       bd.srcbus.buswidth,
 						       bd.dstbus.buswidth,
-						       tsize);
+						       tsize, &cctl2);
 
 				dev_vdbg(pl08x->dev,
 					"%s fill lli with single lli chunk of size 0x%08zx (remainder 0x%08zx)\n",
 					__func__, lli_len, bd.remainder);
 				pl08x_fill_lli_for_desc(&bd, num_llis++,
-					lli_len, cctl);
+					lli_len, cctl, cctl2);
 				total_bytes += lli_len;
 			}
 
@@ -800,12 +813,13 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 				int j;
 				for (j = 0; (j < mbus->buswidth)
 						&& (bd.remainder); j++) {
-					cctl = pl08x_cctl_bits(cctl, 1, 1, 1);
+					cctl = pl08x_cctl_bits(cctl, 1, 1, 1,
+									&cctl2);
 					dev_vdbg(pl08x->dev,
 						"%s align with boundary, single byte (remain 0x%08zx)\n",
 						__func__, bd.remainder);
 					pl08x_fill_lli_for_desc(&bd,
-						num_llis++, 1, cctl);
+						num_llis++, 1, cctl, cctl2);
 					total_bytes++;
 				}
 			}
@@ -815,11 +829,11 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 		 * Send any odd bytes
 		 */
 		while (bd.remainder) {
-			cctl = pl08x_cctl_bits(cctl, 1, 1, 1);
+			cctl = pl08x_cctl_bits(cctl, 1, 1, 1, &cctl2);
 			dev_vdbg(pl08x->dev,
 				"%s align with boundary, single odd byte (remain %zu)\n",
 				__func__, bd.remainder);
-			pl08x_fill_lli_for_desc(&bd, num_llis++, 1, cctl);
+			pl08x_fill_lli_for_desc(&bd, num_llis++, 1, cctl, cctl2);
 			total_bytes++;
 		}
 	}
@@ -849,12 +863,13 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 
 		for (i = 0; i < num_llis; i++) {
 			dev_vdbg(pl08x->dev,
-				 "lli %d @%p: csrc=0x%08x, cdst=0x%08x, cctl=0x%08x, clli=0x%08x\n",
+				 "lli %d @%p: csrc=0x%08x, cdst=0x%08x, cctl=0x%08x, cctl2=0x%08x, clli=0x%08x\n",
 				 i,
 				 &llis_va[i],
 				 llis_va[i].src,
 				 llis_va[i].dst,
 				 llis_va[i].cctl,
+				 llis_va[i].cctl2,
 				 llis_va[i].lli
 				);
 		}
@@ -1935,6 +1950,7 @@ static int pl08x_probe(struct pl08x_driver_data *pl08x)
 		spin_lock_init(&ch->lock);
 		ch->serving = NULL;
 		ch->signal = -1;
+		ch->config_offset = pl08x->vd->config_offset;
 		dev_info(pl08x->dev,
 			 "physical channel %d is %s\n", i,
 			 pl08x_phy_channel_busy(ch) ? "BUSY" : "FREE");
@@ -2004,11 +2020,19 @@ out_no_lli_pool:
 static struct vendor_data vendor_pl080 = {
 	.channels = 8,
 	.dualmaster = true,
+	.config_offset = PL080_CH_CONFIG,
 };
 
 static struct vendor_data vendor_pl081 = {
 	.channels = 2,
 	.dualmaster = false,
+	.config_offset = PL080_CH_CONFIG,
+};
+
+static struct vendor_data vendor_pl080s = {
+	.channels = 8,
+	.dualmaster = true,
+	.config_offset = PL080S_CH_CONFIG,
 };
 
 #ifdef CONFIG_ARM_AMBA

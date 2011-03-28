@@ -100,6 +100,7 @@ struct pl08x_phy_chan {
 	void __iomem *base;
 	spinlock_t lock;
 	int signal;
+	u32 config_offset;
 	struct pl08x_dma_chan *serving;
 };
 
