@@ -237,20 +237,26 @@ static void s6d05a_set_backlight(struct s6d05a_data *data, u8 value)
 static int s6d05a_bl_update_status(struct backlight_device *bl)
 {
 	struct s6d05a_data *data = bl_get_data(bl);
+	int new_state = 1;
+
+	if (bl->props.power != FB_BLANK_UNBLANK)
+		new_state = 0;
+	if (bl->props.state & BL_CORE_FBBLANK)
+		new_state = 0;
+	if (bl->props.state & BL_CORE_SUSPENDED)
+		new_state = 0;
 
 	data->brightness = bl->props.brightness;
 
-	if (bl->props.state & (BL_CORE_FBBLANK | BL_CORE_SUSPENDED))
-	{
-		if (data->state)
-			s6d05a_set_power(data, 0);
+	if (new_state == data->state) {
+		s6d05a_set_backlight(data, data->brightness);
 		return 0;
 	}
 
-	if (!data->state)
-		s6d05a_set_power(data, 1);
+	s6d05a_set_power(data, new_state);
 
-	s6d05a_set_backlight(data, data->brightness);
+	if (new_state)
+		s6d05a_set_backlight(data, data->brightness);
 
 	return 0;
 }
@@ -266,6 +272,7 @@ static int s6d05a_bl_get_brightness(struct backlight_device *bl)
 }
 
 static struct backlight_ops s6d05a_bl_ops = {
+	.options	= BL_CORE_SUSPENDRESUME,
 	.update_status	= s6d05a_bl_update_status,
 	.get_brightness	= s6d05a_bl_get_brightness,
 };
@@ -377,8 +384,9 @@ static int __devinit s6d05a_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, data);
 
 	/* Initialize the LCD */
-	s6d05a_set_power(data, 1);
-	s6d05a_set_backlight(data, BACKLIGHT_LEVEL_MAX);
+	bl->props.power = FB_BLANK_UNBLANK;
+	bl->props.brightness = BACKLIGHT_LEVEL_MAX;
+	backlight_update_status(bl);
 
 	return 0;
 
