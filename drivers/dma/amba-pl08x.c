@@ -4,6 +4,7 @@
  *
  * Author: Peter Pearse <peter.pearse@arm.com>
  * Author: Linus Walleij <linus.walleij@stericsson.com>
+ * Author: Tomasz Figa <tomasz.figa@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -84,8 +85,10 @@
 #include <linux/dmaengine.h>
 #include <linux/amba/bus.h>
 #include <linux/amba/pl08x.h>
+#include <linux/platform_device.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
+#include <linux/clk.h>
 
 #include <asm/hardware/pl080.h>
 
@@ -133,7 +136,11 @@ struct pl08x_driver_data {
 	struct dma_device slave;
 	struct dma_device memcpy;
 	void __iomem *base;
+	struct resource *res;
+	unsigned int irq;
+	struct device *dev;
 	struct amba_device *adev;
+	struct platform_device *pdev;
 	const struct vendor_data *vd;
 	struct pl08x_platform_data *pd;
 	struct pl08x_phy_chan *phy_chans;
@@ -210,7 +217,7 @@ static void pl08x_start_txd(struct pl08x_dma_chan *plchan,
 	while (pl08x_phy_channel_busy(phychan))
 		cpu_relax();
 
-	dev_vdbg(&pl08x->adev->dev,
+	dev_vdbg(pl08x->dev,
 		"WRITE channel %d: csrc=0x%08x, cdst=0x%08x, "
 		"clli=0x%08x, cctl=0x%08x, ccfg=0x%08x\n",
 		phychan->id, lli->src, lli->dst, lli->lli, lli->cctl,
@@ -595,7 +602,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 	txd->llis_va = dma_pool_alloc(pl08x->pool, GFP_NOWAIT,
 				      &txd->llis_bus);
 	if (!txd->llis_va) {
-		dev_err(&pl08x->adev->dev, "%s no memory for llis\n", __func__);
+		dev_err(pl08x->dev, "%s no memory for llis\n", __func__);
 		return 0;
 	}
 
@@ -622,7 +629,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 	/* Set up the bus widths to the maximum */
 	bd.srcbus.buswidth = bd.srcbus.maxwidth;
 	bd.dstbus.buswidth = bd.dstbus.maxwidth;
-	dev_vdbg(&pl08x->adev->dev,
+	dev_vdbg(pl08x->dev,
 		 "%s source bus is %d bytes wide, dest bus is %d bytes wide\n",
 		 __func__, bd.srcbus.buswidth, bd.dstbus.buswidth);
 
@@ -632,13 +639,13 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 	 */
 	max_bytes_per_lli = min(bd.srcbus.buswidth, bd.dstbus.buswidth) *
 		PL080_CONTROL_TRANSFER_SIZE_MASK;
-	dev_vdbg(&pl08x->adev->dev,
+	dev_vdbg(pl08x->dev,
 		 "%s max bytes per lli = %zu\n",
 		 __func__, max_bytes_per_lli);
 
 	/* We need to count this down to zero */
 	bd.remainder = txd->len;
-	dev_vdbg(&pl08x->adev->dev,
+	dev_vdbg(pl08x->dev,
 		 "%s remainder = %zu\n",
 		 __func__, bd.remainder);
 
@@ -652,7 +659,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 	if (txd->len < mbus->buswidth) {
 		/* Less than a bus width available - send as single bytes */
 		while (bd.remainder) {
-			dev_vdbg(&pl08x->adev->dev,
+			dev_vdbg(pl08x->dev,
 				 "%s single byte LLIs for a transfer of "
 				 "less than a bus width (remain 0x%08x)\n",
 				 __func__, bd.remainder);
@@ -663,7 +670,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 	} else {
 		/* Make one byte LLIs until master bus is aligned */
 		while ((mbus->addr) % (mbus->buswidth)) {
-			dev_vdbg(&pl08x->adev->dev,
+			dev_vdbg(pl08x->dev,
 				"%s adjustment lli for less than bus width "
 				 "(remain 0x%08x)\n",
 				 __func__, bd.remainder);
@@ -677,7 +684,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 		 * - if slave is not then we must set its width down
 		 */
 		if (sbus->addr % sbus->buswidth) {
-			dev_dbg(&pl08x->adev->dev,
+			dev_dbg(pl08x->dev,
 				"%s set down bus width to one byte\n",
 				 __func__);
 
@@ -723,7 +730,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 			BUG_ON(lli_len > bd.remainder);
 
 			if (lli_len <= 0) {
-				dev_err(&pl08x->adev->dev,
+				dev_err(pl08x->dev,
 					"%s lli_len is %zu, <= 0\n",
 						__func__, lli_len);
 				return 0;
@@ -766,7 +773,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 						      sbus->buswidth);
 
 				if (target_len != lli_len) {
-					dev_vdbg(&pl08x->adev->dev,
+					dev_vdbg(pl08x->dev,
 					"%s can't send what we want. Desired 0x%08zx, lli of 0x%08zx bytes in txd of 0x%08zx\n",
 					__func__, target_len, lli_len, txd->len);
 				}
@@ -776,7 +783,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 						       bd.dstbus.buswidth,
 						       tsize);
 
-				dev_vdbg(&pl08x->adev->dev,
+				dev_vdbg(pl08x->dev,
 					"%s fill lli with single lli chunk of size 0x%08zx (remainder 0x%08zx)\n",
 					__func__, lli_len, bd.remainder);
 				pl08x_fill_lli_for_desc(&bd, num_llis++,
@@ -794,7 +801,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 				for (j = 0; (j < mbus->buswidth)
 						&& (bd.remainder); j++) {
 					cctl = pl08x_cctl_bits(cctl, 1, 1, 1);
-					dev_vdbg(&pl08x->adev->dev,
+					dev_vdbg(pl08x->dev,
 						"%s align with boundary, single byte (remain 0x%08zx)\n",
 						__func__, bd.remainder);
 					pl08x_fill_lli_for_desc(&bd,
@@ -809,7 +816,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 		 */
 		while (bd.remainder) {
 			cctl = pl08x_cctl_bits(cctl, 1, 1, 1);
-			dev_vdbg(&pl08x->adev->dev,
+			dev_vdbg(pl08x->dev,
 				"%s align with boundary, single odd byte (remain %zu)\n",
 				__func__, bd.remainder);
 			pl08x_fill_lli_for_desc(&bd, num_llis++, 1, cctl);
@@ -817,14 +824,14 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 		}
 	}
 	if (total_bytes != txd->len) {
-		dev_err(&pl08x->adev->dev,
+		dev_err(pl08x->dev,
 			"%s size of encoded lli:s don't match total txd, transferred 0x%08zx from size 0x%08zx\n",
 			__func__, total_bytes, txd->len);
 		return 0;
 	}
 
 	if (num_llis >= MAX_NUM_TSFR_LLIS) {
-		dev_err(&pl08x->adev->dev,
+		dev_err(pl08x->dev,
 			"%s need to increase MAX_NUM_TSFR_LLIS from 0x%08x\n",
 			__func__, (u32) MAX_NUM_TSFR_LLIS);
 		return 0;
@@ -841,7 +848,7 @@ static int pl08x_fill_llis_for_desc(struct pl08x_driver_data *pl08x,
 		int i;
 
 		for (i = 0; i < num_llis; i++) {
-			dev_vdbg(&pl08x->adev->dev,
+			dev_vdbg(pl08x->dev,
 				 "lli %d @%p: csrc=0x%08x, cdst=0x%08x, cctl=0x%08x, clli=0x%08x\n",
 				 i,
 				 &llis_va[i],
@@ -913,7 +920,7 @@ static int prep_phy_channel(struct pl08x_dma_chan *plchan,
 	ch = pl08x_get_phy_channel(pl08x, plchan);
 	if (!ch) {
 		/* No physical channel available, cope with it */
-		dev_dbg(&pl08x->adev->dev, "no physical channel available for xfer on %s\n", plchan->name);
+		dev_dbg(pl08x->dev, "no physical channel available for xfer on %s\n", plchan->name);
 		return -EBUSY;
 	}
 
@@ -927,7 +934,7 @@ static int prep_phy_channel(struct pl08x_dma_chan *plchan,
 	    pl08x->pd->get_signal) {
 		ret = pl08x->pd->get_signal(plchan);
 		if (ret < 0) {
-			dev_dbg(&pl08x->adev->dev,
+			dev_dbg(pl08x->dev,
 				"unable to use physical channel %d for transfer on %s due to platform restrictions\n",
 				ch->id, plchan->name);
 			/* Release physical channel & return */
@@ -943,7 +950,7 @@ static int prep_phy_channel(struct pl08x_dma_chan *plchan,
 			txd->ccfg |= ch->signal << PL080_CONFIG_SRC_SEL_SHIFT;
 	}
 
-	dev_dbg(&pl08x->adev->dev, "allocated physical channel %d and signal %d for xfer on %s\n",
+	dev_dbg(pl08x->dev, "allocated physical channel %d and signal %d for xfer on %s\n",
 		 ch->id,
 		 ch->signal,
 		 plchan->name);
@@ -1127,7 +1134,7 @@ static int dma_set_runtime_config(struct dma_chan *chan,
 		addr_width = config->src_addr_width;
 		maxburst = config->src_maxburst;
 	} else {
-		dev_err(&pl08x->adev->dev,
+		dev_err(pl08x->dev,
 			"bad runtime_config: alien transfer direction\n");
 		return -EINVAL;
 	}
@@ -1146,7 +1153,7 @@ static int dma_set_runtime_config(struct dma_chan *chan,
 			(PL080_WIDTH_32BIT << PL080_CONTROL_DWIDTH_SHIFT);
 		break;
 	default:
-		dev_err(&pl08x->adev->dev,
+		dev_err(pl08x->dev,
 			"bad runtime_config: alien address width\n");
 		return -EINVAL;
 	}
@@ -1172,7 +1179,7 @@ static int dma_set_runtime_config(struct dma_chan *chan,
 	/* Modify the default channel data to fit PrimeCell request */
 	cd->cctl = cctl;
 
-	dev_dbg(&pl08x->adev->dev,
+	dev_dbg(pl08x->dev,
 		"configured channel %s (%s) for %s, data width %d, "
 		"maxburst %d words, LE, CCTL=0x%08x\n",
 		dma_chan_name(chan), plchan->name,
@@ -1319,7 +1326,7 @@ static struct dma_async_tx_descriptor *pl08x_prep_dma_memcpy(
 
 	txd = pl08x_get_txd(plchan, flags);
 	if (!txd) {
-		dev_err(&pl08x->adev->dev,
+		dev_err(pl08x->dev,
 			"%s no memory for descriptor\n", __func__);
 		return NULL;
 	}
@@ -1363,22 +1370,22 @@ static struct dma_async_tx_descriptor *pl08x_prep_slave_sg(
 	 * Current implementation ASSUMES only one sg
 	 */
 	if (sg_len != 1) {
-		dev_err(&pl08x->adev->dev, "%s prepared too long sglist\n",
+		dev_err(pl08x->dev, "%s prepared too long sglist\n",
 			__func__);
 		BUG();
 	}
 
-	dev_dbg(&pl08x->adev->dev, "%s prepare transaction of %d bytes from %s\n",
+	dev_dbg(pl08x->dev, "%s prepare transaction of %d bytes from %s\n",
 		__func__, sgl->length, plchan->name);
 
 	txd = pl08x_get_txd(plchan, flags);
 	if (!txd) {
-		dev_err(&pl08x->adev->dev, "%s no txd\n", __func__);
+		dev_err(pl08x->dev, "%s no txd\n", __func__);
 		return NULL;
 	}
 
 	if (direction != plchan->runtime_direction)
-		dev_err(&pl08x->adev->dev, "%s DMA setup does not match "
+		dev_err(pl08x->dev, "%s DMA setup does not match "
 			"the direction configured for the PrimeCell\n",
 			__func__);
 
@@ -1419,7 +1426,7 @@ static struct dma_async_tx_descriptor *pl08x_prep_slave_sg(
 		src_buses = plchan->cd->periph_buses;
 		dst_buses = pl08x->mem_buses;
 	} else {
-		dev_err(&pl08x->adev->dev,
+		dev_err(pl08x->dev,
 			"%s direction unsupported\n", __func__);
 		return NULL;
 	}
@@ -1647,7 +1654,7 @@ static irqreturn_t pl08x_irq(int irq, void *dev)
 	val = readl(pl08x->base + PL080_ERR_STATUS);
 	if (val) {
 		/* An error interrupt (on one or more channels) */
-		dev_err(&pl08x->adev->dev,
+		dev_err(pl08x->dev,
 			"%s error interrupt, register value 0x%08x\n",
 				__func__, val);
 		/*
@@ -1698,7 +1705,7 @@ static int pl08x_dma_init_virtual_channels(struct pl08x_driver_data *pl08x,
 	for (i = 0; i < channels; i++) {
 		chan = kzalloc(sizeof(struct pl08x_dma_chan), GFP_KERNEL);
 		if (!chan) {
-			dev_err(&pl08x->adev->dev,
+			dev_err(pl08x->dev,
 				"%s no memory for channel\n", __func__);
 			return -ENOMEM;
 		}
@@ -1719,13 +1726,13 @@ static int pl08x_dma_init_virtual_channels(struct pl08x_driver_data *pl08x,
 			}
 		}
 		if (chan->cd->circular_buffer) {
-			dev_err(&pl08x->adev->dev,
+			dev_err(pl08x->dev,
 				"channel %s: circular buffers not supported\n",
 				chan->name);
 			kfree(chan);
 			continue;
 		}
-		dev_info(&pl08x->adev->dev,
+		dev_info(pl08x->dev,
 			 "initialize virtual channel \"%s\"\n",
 			 chan->name);
 
@@ -1740,7 +1747,7 @@ static int pl08x_dma_init_virtual_channels(struct pl08x_driver_data *pl08x,
 
 		list_add_tail(&chan->chan.device_node, &dmadev->channels);
 	}
-	dev_info(&pl08x->adev->dev, "initialized %d virtual %s channels\n",
+	dev_info(pl08x->dev, "initialized %d virtual %s channels\n",
 		 i, slave ? "slave" : "memcpy");
 	return i;
 }
@@ -1834,7 +1841,7 @@ static const struct file_operations pl08x_debugfs_operations = {
 static void init_pl08x_debugfs(struct pl08x_driver_data *pl08x)
 {
 	/* Expose a simple debugfs interface to view all clocks */
-	(void) debugfs_create_file(dev_name(&pl08x->adev->dev), S_IFREG | S_IRUGO,
+	(void) debugfs_create_file(dev_name(pl08x->dev), S_IFREG | S_IRUGO,
 				   NULL, pl08x,
 				   &pl08x_debugfs_operations);
 }
@@ -1845,27 +1852,13 @@ static inline void init_pl08x_debugfs(struct pl08x_driver_data *pl08x)
 }
 #endif
 
-static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
+static int pl08x_probe(struct pl08x_driver_data *pl08x)
 {
-	struct pl08x_driver_data *pl08x;
-	const struct vendor_data *vd = id->data;
-	int ret = 0;
-	int i;
-
-	ret = amba_request_regions(adev, NULL);
-	if (ret)
-		return ret;
-
-	/* Create the driver state holder */
-	pl08x = kzalloc(sizeof(struct pl08x_driver_data), GFP_KERNEL);
-	if (!pl08x) {
-		ret = -ENOMEM;
-		goto out_no_pl08x;
-	}
+	int ret = 0, i;
 
 	/* Initialize memcpy engine */
 	dma_cap_set(DMA_MEMCPY, pl08x->memcpy.cap_mask);
-	pl08x->memcpy.dev = &adev->dev;
+	pl08x->memcpy.dev = pl08x->dev;
 	pl08x->memcpy.device_alloc_chan_resources = pl08x_alloc_chan_resources;
 	pl08x->memcpy.device_free_chan_resources = pl08x_free_chan_resources;
 	pl08x->memcpy.device_prep_dma_memcpy = pl08x_prep_dma_memcpy;
@@ -1876,7 +1869,7 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 
 	/* Initialize slave engine */
 	dma_cap_set(DMA_SLAVE, pl08x->slave.cap_mask);
-	pl08x->slave.dev = &adev->dev;
+	pl08x->slave.dev = pl08x->dev;
 	pl08x->slave.device_alloc_chan_resources = pl08x_alloc_chan_resources;
 	pl08x->slave.device_free_chan_resources = pl08x_free_chan_resources;
 	pl08x->slave.device_prep_dma_interrupt = pl08x_prep_dma_interrupt;
@@ -1884,17 +1877,6 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 	pl08x->slave.device_issue_pending = pl08x_issue_pending;
 	pl08x->slave.device_prep_slave_sg = pl08x_prep_slave_sg;
 	pl08x->slave.device_control = pl08x_control;
-
-	/* Get the platform data */
-	pl08x->pd = dev_get_platdata(&adev->dev);
-	if (!pl08x->pd) {
-		dev_err(&adev->dev, "no platform data supplied\n");
-		goto out_no_platdata;
-	}
-
-	/* Assign useful pointers to the driver state */
-	pl08x->adev = adev;
-	pl08x->vd = vd;
 
 	/* By default, AHB1 only.  If dualmaster, from platform */
 	pl08x->lli_buses = PL08X_AHB1;
@@ -1905,7 +1887,7 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 	}
 
 	/* A DMA memory pool for LLIs, align on 1-byte boundary */
-	pl08x->pool = dma_pool_create(DRIVER_NAME, &pl08x->adev->dev,
+	pl08x->pool = dma_pool_create(DRIVER_NAME, pl08x->dev,
 			PL08X_LLI_TSFR_SIZE, PL08X_ALIGN, 0);
 	if (!pl08x->pool) {
 		ret = -ENOMEM;
@@ -1914,7 +1896,7 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 
 	spin_lock_init(&pl08x->lock);
 
-	pl08x->base = ioremap(adev->res.start, resource_size(&adev->res));
+	pl08x->base = ioremap(pl08x->res->start, resource_size(pl08x->res));
 	if (!pl08x->base) {
 		ret = -ENOMEM;
 		goto out_no_ioremap;
@@ -1927,25 +1909,25 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 	writel(0x000000FF, pl08x->base + PL080_ERR_CLEAR);
 	writel(0x000000FF, pl08x->base + PL080_TC_CLEAR);
 
-	ret = request_irq(adev->irq[0], pl08x_irq, IRQF_DISABLED,
+	ret = request_irq(pl08x->irq, pl08x_irq, IRQF_DISABLED,
 			  DRIVER_NAME, pl08x);
 	if (ret) {
-		dev_err(&adev->dev, "%s failed to request interrupt %d\n",
-			__func__, adev->irq[0]);
+		dev_err(pl08x->dev, "%s failed to request interrupt %d\n",
+			__func__, pl08x->irq);
 		goto out_no_irq;
 	}
 
 	/* Initialize physical channels */
-	pl08x->phy_chans = kmalloc((vd->channels * sizeof(struct pl08x_phy_chan)),
+	pl08x->phy_chans = kmalloc((pl08x->vd->channels * sizeof(struct pl08x_phy_chan)),
 			GFP_KERNEL);
 	if (!pl08x->phy_chans) {
-		dev_err(&adev->dev, "%s failed to allocate "
+		dev_err(pl08x->dev, "%s failed to allocate "
 			"physical channel holders\n",
 			__func__);
 		goto out_no_phychans;
 	}
 
-	for (i = 0; i < vd->channels; i++) {
+	for (i = 0; i < pl08x->vd->channels; i++) {
 		struct pl08x_phy_chan *ch = &pl08x->phy_chans[i];
 
 		ch->id = i;
@@ -1953,7 +1935,7 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 		spin_lock_init(&ch->lock);
 		ch->serving = NULL;
 		ch->signal = -1;
-		dev_info(&adev->dev,
+		dev_info(pl08x->dev,
 			 "physical channel %d is %s\n", i,
 			 pl08x_phy_channel_busy(ch) ? "BUSY" : "FREE");
 	}
@@ -1962,7 +1944,7 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 	ret = pl08x_dma_init_virtual_channels(pl08x, &pl08x->memcpy,
 					      pl08x->vd->channels, false);
 	if (ret <= 0) {
-		dev_warn(&pl08x->adev->dev,
+		dev_warn(pl08x->dev,
 			 "%s failed to enumerate memcpy channels - %d\n",
 			 __func__, ret);
 		goto out_no_memcpy;
@@ -1974,7 +1956,7 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 					      pl08x->pd->num_slave_channels,
 					      true);
 	if (ret <= 0) {
-		dev_warn(&pl08x->adev->dev,
+		dev_warn(pl08x->dev,
 			"%s failed to enumerate slave channels - %d\n",
 				__func__, ret);
 		goto out_no_slave;
@@ -1983,7 +1965,7 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 
 	ret = dma_async_device_register(&pl08x->memcpy);
 	if (ret) {
-		dev_warn(&pl08x->adev->dev,
+		dev_warn(pl08x->dev,
 			"%s failed to register memcpy as an async device - %d\n",
 			__func__, ret);
 		goto out_no_memcpy_reg;
@@ -1991,17 +1973,13 @@ static int pl08x_probe(struct amba_device *adev, struct amba_id *id)
 
 	ret = dma_async_device_register(&pl08x->slave);
 	if (ret) {
-		dev_warn(&pl08x->adev->dev,
+		dev_warn(pl08x->dev,
 			"%s failed to register slave as an async device - %d\n",
 			__func__, ret);
 		goto out_no_slave_reg;
 	}
 
-	amba_set_drvdata(adev, pl08x);
 	init_pl08x_debugfs(pl08x);
-	dev_info(&pl08x->adev->dev, "DMA: PL%03x rev%u at 0x%08llx irq %d\n",
-		 amba_part(adev), amba_rev(adev),
-		 (unsigned long long)adev->res.start, adev->irq[0]);
 	return 0;
 
 out_no_slave_reg:
@@ -2013,16 +1991,12 @@ out_no_slave:
 out_no_memcpy:
 	kfree(pl08x->phy_chans);
 out_no_phychans:
-	free_irq(adev->irq[0], pl08x);
+	free_irq(pl08x->irq, pl08x);
 out_no_irq:
 	iounmap(pl08x->base);
 out_no_ioremap:
 	dma_pool_destroy(pl08x->pool);
 out_no_lli_pool:
-out_no_platdata:
-	kfree(pl08x);
-out_no_pl08x:
-	amba_release_regions(adev);
 	return ret;
 }
 
@@ -2037,7 +2011,57 @@ static struct vendor_data vendor_pl081 = {
 	.dualmaster = false,
 };
 
-static struct amba_id pl08x_ids[] = {
+#ifdef CONFIG_ARM_AMBA
+static int pl08x_amba_probe(struct amba_device *adev, struct amba_id *id)
+{
+	struct pl08x_driver_data *pl08x;
+	const struct vendor_data *vd = id->data;
+	int ret = 0;
+
+	ret = amba_request_regions(adev, NULL);
+	if (ret)
+		return ret;
+
+	/* Create the driver state holder */
+	pl08x = kzalloc(sizeof(struct pl08x_driver_data), GFP_KERNEL);
+	if (!pl08x) {
+		ret = -ENOMEM;
+		goto out_no_pl08x;
+	}
+
+	/* Assign useful pointers to the driver state */
+	pl08x->dev = &adev->dev;
+	pl08x->adev = adev;
+	pl08x->vd = vd;
+	pl08x->res = &adev->res;
+	pl08x->irq = adev->irq[0];
+
+	/* Get the platform data */
+	pl08x->pd = dev_get_platdata(&adev->dev);
+	if (!pl08x->pd) {
+		dev_err(&adev->dev, "no platform data supplied\n");
+		goto out_no_platdata;
+	}
+
+	ret = pl08x_probe(pl08x);
+	if (ret)
+		goto out_probe_err;
+
+	amba_set_drvdata(adev, pl08x);
+	dev_info(&pl08x->adev->dev, "DMA: PL%03x rev%u at 0x%08llx irq %d\n",
+		 amba_part(adev), amba_rev(adev),
+		 (unsigned long long)adev->res.start, adev->irq[0]);
+	return 0;
+
+out_probe_err:
+out_no_platdata:
+	kfree(pl08x);
+out_no_pl08x:
+	amba_release_regions(adev);
+	return ret;
+}
+
+static struct amba_id pl08x_amba_ids[] = {
 	/* PL080 */
 	{
 		.id	= 0x00041080,
@@ -2061,18 +2085,128 @@ static struct amba_id pl08x_ids[] = {
 
 static struct amba_driver pl08x_amba_driver = {
 	.drv.name	= DRIVER_NAME,
-	.id_table	= pl08x_ids,
-	.probe		= pl08x_probe,
+	.id_table	= pl08x_amba_ids,
+	.probe		= pl08x_amba_probe,
+};
+#endif
+
+static int pl08x_plat_probe(struct platform_device *pdev)
+{
+	struct vendor_data *vd;
+	struct pl08x_driver_data *pl08x;
+	struct resource *r;
+	struct clk *clk = 0;
+	int ret = 0;
+
+	/* Create the driver state holder */
+	pl08x = kzalloc(sizeof(struct pl08x_driver_data), GFP_KERNEL);
+	if (!pl08x)
+		return -ENOMEM;
+
+	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!r) {
+		dev_err(&pdev->dev, "no memory resource defined\n");
+		ret = -ENOENT;
+		goto out_no_mem_res;
+	}
+
+	pl08x->res = request_mem_region(r->start, resource_size(r), pdev->name);
+	if (!pl08x->res) {
+		dev_err(&pdev->dev, "failed to request memory resource\n");
+		ret = -EBUSY;
+		goto out_no_mem_res;
+	}
+
+	r = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+	if (!r) {
+		dev_err(&pdev->dev, "no IRQ resource defined\n");
+		ret = -ENOENT;
+		goto out_no_irq_res;
+	}
+	pl08x->irq = r->start;
+
+	/* Assign useful pointers to the driver state */
+	vd = (struct vendor_data *)(platform_get_device_id(pdev)->driver_data);
+	pl08x->dev = &pdev->dev;
+	pl08x->pdev = pdev;
+	pl08x->vd = vd;
+
+	/* Get the platform data */
+	pl08x->pd = pdev->dev.platform_data;
+	if (!pl08x->pd) {
+		dev_err(&pdev->dev, "no platform data supplied\n");
+		goto out_no_platdata;
+	}
+
+	if (pl08x->pd->clock) {
+		clk = clk_get(&pdev->dev, pl08x->pd->clock);
+		if (IS_ERR(clk)) {
+			dev_err(&pdev->dev, "failed to get device clock\n");
+			goto out_no_clock;
+		}
+		clk_enable(clk);
+	}
+
+	ret = pl08x_probe(pl08x);
+	if (ret)
+		goto out_probe_err;
+
+	platform_set_drvdata(pdev, pl08x);
+	dev_info(&pdev->dev, "DMA: PL08x at 0x%08llx irq %d\n",
+		 (unsigned long long)pl08x->res->start, pl08x->irq);
+	return 0;
+
+out_probe_err:
+	if (clk) {
+		clk_disable(clk);
+		clk_put(clk);
+	}
+out_no_clock:
+out_no_platdata:
+out_no_irq_res:
+	release_mem_region(pl08x->res->start, resource_size(pl08x->res));
+out_no_mem_res:
+	kfree(pl08x);
+	return ret;
+}
+
+static struct platform_device_id pl08x_plat_ids[] = {
+	{
+		.name		= "pl080s-dmac",
+		.driver_data	= (kernel_ulong_t)&vendor_pl080s,
+	}, {
+		.name		= "pl080-dmac",
+		.driver_data	= (kernel_ulong_t)&vendor_pl080,
+	}, {
+		.name		= "pl081-dmac",
+		.driver_data	= (kernel_ulong_t)&vendor_pl081,
+	}, {
+		/* End of table */
+	},
+};
+
+static struct platform_driver pl08x_plat_driver = {
+	.driver         = {
+		.name	= DRIVER_NAME,
+	},
+	.id_table	= pl08x_plat_ids,
+	.probe          = pl08x_plat_probe,
 };
 
 static int __init pl08x_init(void)
 {
 	int retval;
+#ifdef CONFIG_ARM_AMBA
 	retval = amba_driver_register(&pl08x_amba_driver);
 	if (retval)
 		printk(KERN_WARNING DRIVER_NAME
 		       "failed to register as an AMBA device (%d)\n",
 		       retval);
+#endif
+	retval = platform_driver_register(&pl08x_plat_driver);
+	if (retval)
+		printk(KERN_WARNING DRIVER_NAME
+			"failed to register platofrm driver (%d)\n", retval);
 	return retval;
 }
 subsys_initcall(pl08x_init);

@@ -209,6 +209,7 @@ struct pl08x_platform_data {
 	void (*put_signal)(struct pl08x_dma_chan *);
 	u8 lli_buses;
 	u8 mem_buses;
+	const char *clock;
 };
 
 #ifdef CONFIG_AMBA_PL08X
